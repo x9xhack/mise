@@ -503,7 +503,7 @@ pub trait Backend: Debug + Send + Sync {
     }
     fn is_version_installed(
         &self,
-        config: &Arc<Config>,
+        _config: &Arc<Config>,
         tv: &ToolVersion,
         check_symlink: bool,
     ) -> bool {
@@ -534,14 +534,7 @@ pub trait Backend: Debug + Send + Sync {
         };
         match tv.request {
             ToolRequest::System { .. } => true,
-            _ => {
-                if let Some(install_path) = tv.request.install_path(config)
-                    && check_path(&install_path, true)
-                {
-                    return true;
-                }
-                check_path(&tv.install_path(), check_symlink)
-            }
+            _ => check_path(&tv.install_path(), check_symlink),
         }
     }
     async fn is_version_outdated(&self, config: &Arc<Config>, tv: &ToolVersion) -> bool {
@@ -847,7 +840,7 @@ pub trait Backend: Debug + Send + Sync {
             plugin.is_installed_err()?;
         }
 
-        if self.is_version_installed(&ctx.config, &tv, true) {
+        if self.is_version_installed(&ctx.config, &tv, true) && ctx.reason != "update" {
             if ctx.force {
                 self.uninstall_version(&ctx.config, &tv, ctx.pr.as_ref(), false)
                     .await?;
@@ -880,10 +873,11 @@ pub trait Backend: Debug + Send + Sync {
         versions_host::track_install(tv.short(), &tv.ba().full(), &tv.version);
 
         ctx.pr.set_message("install".into());
-        let _lock = lock_file::get(&tv.install_path(), ctx.force)?;
+        let _lock = lock_file::get(&tv.install_path())?;
 
         // Double-checked (locking) that it wasn't installed while we were waiting for the lock
-        if self.is_version_installed(&ctx.config, &tv, true) && !ctx.force {
+        if self.is_version_installed(&ctx.config, &tv, true) && !ctx.force && ctx.reason != "update"
+        {
             return Ok(tv);
         }
 
@@ -1295,12 +1289,15 @@ pub trait Backend: Debug + Send + Sync {
 
     async fn outdated_info(
         &self,
-        _config: &Arc<Config>,
-        _tv: &ToolVersion,
-        _bump: bool,
-        _opts: &ResolveOptions,
+        config: &Arc<Config>,
+        tv: &ToolVersion,
+        bump: bool,
+        opts: &ResolveOptions,
     ) -> Result<Option<OutdatedInfo>> {
-        Ok(None)
+        Ok(OutdatedInfo::resolve(config, tv.clone(), bump, opts)
+            .await
+            .ok()
+            .flatten())
     }
 
     // ========== Lockfile Metadata Fetching Methods ==========
